@@ -2,35 +2,34 @@
 
 import yfinance as yf
 import pandas as pd
-import time # Retained from download_data.py, though not directly used in combined main logic
+import time
 from datetime import datetime, timedelta
-import pytz # From converter.py
-# import traceback # Only needed inside specific exception blocks
+import pytz
+import os # Import the os module for file operations
+# import sys # Removed, as we're now using interactive input
 
 # --- Configuration for Data Download ---
-DOWNLOAD_TICKER_SYMBOL = 'NQ=F'      # Yahoo Finance ticker (e.g., E-mini Nasdaq 100 Futures)
-# For 15m data, Yahoo typically provides the last 60 days.
+# DOWNLOAD_TICKER_SYMBOL will now be determined by user input
+DOWNLOAD_TICKER_SYMBOL = '' # Initialize empty
+
 DOWNLOAD_END_DATE_DT = datetime.now()
-DOWNLOAD_START_DATE_DT = DOWNLOAD_END_DATE_DT - timedelta(days=59) # Data is usually available for the last 60 days
+DOWNLOAD_START_DATE_DT = DOWNLOAD_END_DATE_DT - timedelta(days=59)
 DOWNLOAD_START_DATE = DOWNLOAD_START_DATE_DT.strftime('%Y-%m-%d')
 DOWNLOAD_END_DATE = DOWNLOAD_END_DATE_DT.strftime('%Y-%m-%d')
-DOWNLOAD_INTERVAL_TO_FETCH = '15m'   # Set interval (e.g., 15 minutes)
-# This will be the intermediate CSV, used by the converter part
-DOWNLOAD_OUTPUT_CSV_FILENAME = 'nq_15m_intermediate_data.csv'
+DOWNLOAD_INTERVAL_TO_FETCH = '15m'
+
+# This will be the intermediate CSV, used by the converter part. Dynamically set later.
+DOWNLOAD_OUTPUT_CSV_FILENAME = ''
 # Columns to be saved in the downloaded CSV
 DOWNLOAD_DESIRED_COLUMNS_OUTPUT_ORDER = ['time', 'open', 'high', 'low', 'close', 'volume']
 
 # --- Configuration for Data Conversion ---
-# CONVERTER_CSV_FILENAME will be set to DOWNLOAD_OUTPUT_CSV_FILENAME in the main logic
-CONVERTER_UNIX_TIMESTAMP_UNIT = 's' # 's' for seconds, 'ms' for milliseconds
-CONVERTER_OUTPUT_SHEET_NAME = "PriceData_NY" # Sheet name in the output Excel file
-CONVERTER_GAP_INTERVAL_MINUTES = 15 # Expected interval in minutes for gap filling
-# Columns the converter expects/needs from the CSV (subset of downloaded columns is fine)
+CONVERTER_UNIX_TIMESTAMP_UNIT = 's'
+CONVERTER_OUTPUT_SHEET_NAME = "PriceData_NY"
+CONVERTER_GAP_INTERVAL_MINUTES = 15
 CONVERTER_INPUT_COLUMNS_FROM_CSV = ['time', 'open', 'high', 'low', 'close']
-# Final desired order of columns in the Excel output
 CONVERTER_FINAL_EXCEL_ORDERED_COLUMNS = ['Date', 'Time', 'OPEN', 'HIGH', 'LOW', 'CLOSE']
-# Output Excel filename will be derived from DOWNLOAD_OUTPUT_CSV_FILENAME
-
+# Output Excel filename will be derived dynamically
 
 # --- Function from download_data.py (Modified for better integration) ---
 def download_yahoo_finance_data(symbol, start, end, interval, filename, desired_columns):
@@ -48,18 +47,17 @@ def download_yahoo_finance_data(symbol, start, end, interval, filename, desired_
             return False
 
         print("Data downloaded successfully. Processing...")
-        data_df.reset_index(inplace=True) # Moves 'Datetime' or 'Date' from index to a column
+        data_df.reset_index(inplace=True)
 
         datetime_col_name = None
         if 'Datetime' in data_df.columns:
             datetime_col_name = 'Datetime'
-        elif 'Date' in data_df.columns: # Less likely for intraday but check
+        elif 'Date' in data_df.columns:
             datetime_col_name = 'Date'
         else:
             print("Error: Could not find the Datetime column in the downloaded data.")
             return False
 
-        # Convert datetime column to Unix timestamp (seconds)
         data_df['time'] = data_df[datetime_col_name].apply(lambda x: int(x.timestamp()))
 
         data_df.rename(columns={
@@ -128,7 +126,7 @@ def convert_csv_to_excel_ny_time(csv_filepath, excel_filepath,
         print("Identifying and filling time gaps...")
         if not df_processed.empty:
             df_processed.sort_values(by='time_dt_ny', inplace=True)
-            gap_freq = f'{gap_interval_minutes}T' # Pandas frequency string
+            gap_freq = f'{gap_interval_minutes}T'
             df_processed.set_index('time_dt_ny', inplace=True)
 
             if not df_processed.empty:
@@ -141,8 +139,8 @@ def convert_csv_to_excel_ny_time(csv_filepath, excel_filepath,
                 for col_name in ohlc_cols_original_case:
                     if col_name in df_reindexed.columns:
                         df_reindexed[col_name].fillna("GAP", inplace=True)
-                    else: # Should not happen if csv_input_columns are correctly set and present
-                        df_reindexed[col_name] = "GAP" 
+                    else:
+                        df_reindexed[col_name] = "GAP"
                 
                 df_reindexed.reset_index(inplace=True)
                 df_processed = df_reindexed.rename(columns={'index': 'time_dt_ny'})
@@ -161,10 +159,9 @@ def convert_csv_to_excel_ny_time(csv_filepath, excel_filepath,
             'open': 'OPEN', 'high': 'HIGH', 'low': 'LOW', 'close': 'CLOSE'
         }, inplace=True)
         
-        # Ensure all columns in final_excel_columns exist, create if not (though they should from prior steps)
         for col in final_excel_columns:
             if col not in df_processed.columns:
-                 df_processed[col] = None # Or some default, though 'Date', 'Time', 'OPEN', etc. should exist
+                 df_processed[col] = None
 
         output_df = df_processed[final_excel_columns].copy()
         print(f"Prepared data for Excel with columns: {', '.join(final_excel_columns)}")
@@ -173,7 +170,7 @@ def convert_csv_to_excel_ny_time(csv_filepath, excel_filepath,
         print("Formatting price columns (to 3 decimal places, comma as separator)...")
         for col in price_cols_to_format:
             if col in output_df.columns:
-                output_df[col] = output_df[col].astype(object) # Ensure column can hold mixed types (numbers and "GAP")
+                output_df[col] = output_df[col].astype(object)
                 def format_price_or_gap(value):
                     if isinstance(value, str) and value == "GAP":
                         return "GAP"
@@ -184,8 +181,8 @@ def convert_csv_to_excel_ny_time(csv_filepath, excel_filepath,
                             num_val = float(str(value))
                             return f"{num_val:.3f}".replace('.', ',')
                         except (ValueError, TypeError):
-                            return str(value) 
-                    return '' # For NaN/None values that are not "GAP"
+                            return str(value)
+                    return ''
                 output_df[col] = output_df[col].apply(format_price_or_gap)
         print("Price columns formatted.")
 
@@ -214,6 +211,37 @@ def convert_csv_to_excel_ny_time(csv_filepath, excel_filepath,
 if __name__ == "__main__":
     print("--- Starting Data Download and Conversion Process ---")
 
+    # Define the mapping of user choice to ticker symbol
+    market_data_options = {
+        1: {"name": "USDX Futures", "symbol": "DX=F"},
+        2: {"name": "S&P 500 Futures", "symbol": "ES=F"},
+        3: {"name": "NASDAQ Futures", "symbol": "NQ=F"}
+    }
+
+    selected_symbol = None
+    while selected_symbol is None:
+        print("\nWhich market data do you want to download?")
+        for key, value in market_data_options.items():
+            print(f"{key}. {value['name']}")
+        
+        choice = input("Enter the number of your choice: ")
+        
+        try:
+            choice_num = int(choice)
+            if choice_num in market_data_options:
+                selected_symbol = market_data_options[choice_num]["symbol"]
+                DOWNLOAD_TICKER_SYMBOL = selected_symbol
+                print(f"You selected: {market_data_options[choice_num]['name']} ({selected_symbol})")
+            else:
+                print("Invalid choice. Please enter a number from the list.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    # Dynamically set filenames based on the selected ticker symbol
+    # This part remains similar to the previous version but uses the interactively selected symbol
+    DOWNLOAD_OUTPUT_CSV_FILENAME = f'{DOWNLOAD_TICKER_SYMBOL.replace("=F", "").lower()}_15m_intermediate_data.csv'
+    output_excel_filename = DOWNLOAD_OUTPUT_CSV_FILENAME.rsplit('.', 1)[0] + '.xlsx'
+
     # Step 1: Download data
     download_successful = download_yahoo_finance_data(
         symbol=DOWNLOAD_TICKER_SYMBOL,
@@ -227,11 +255,9 @@ if __name__ == "__main__":
     if download_successful:
         print(f"\n--- Data download successful. Proceeding to conversion. ---")
         
-        # Step 2: Convert the downloaded CSV to Excel
         input_csv_for_conversion = DOWNLOAD_OUTPUT_CSV_FILENAME
-        # Derive output Excel filename from the CSV filename
-        output_excel_filename = input_csv_for_conversion.rsplit('.', 1)[0] + '.xlsx'
 
+        # Step 2: Convert the downloaded CSV to Excel
         conversion_successful = convert_csv_to_excel_ny_time(
             csv_filepath=input_csv_for_conversion,
             excel_filepath=output_excel_filename,
@@ -244,6 +270,12 @@ if __name__ == "__main__":
 
         if conversion_successful:
             print(f"\n--- Data conversion successful. Excel file created: {output_excel_filename} ---")
+            # Remove the intermediate CSV file
+            try:
+                os.remove(DOWNLOAD_OUTPUT_CSV_FILENAME)
+                print(f"Successfully removed intermediate CSV file: {DOWNLOAD_OUTPUT_CSV_FILENAME}")
+            except OSError as e:
+                print(f"Error removing CSV file {DOWNLOAD_OUTPUT_CSV_FILENAME}: {e}")
         else:
             print("\n--- Data conversion failed. ---")
     else:
