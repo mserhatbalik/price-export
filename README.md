@@ -1,3 +1,3 @@
 # price-export
 
-Price data CSV to Sheets conversion script.
+Price data CSV to Sheets conversion script..
